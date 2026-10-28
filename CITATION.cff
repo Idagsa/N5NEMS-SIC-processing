@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "N5NEMS-SIC-processing: sea ice concentration retrieval and graph neural network gap-filling for Nimbus-5 NEMS, 1972-1973"
+version: 1.0.0
+license: MIT
+repository-code: "https://github.com/Idagsa/N5NEMS-SIC-processing"
+authors:
+  - family-names: Andersen
+    given-names: Ida Grum-Schwensen
+    affiliation: "Technical University of Denmark, Department of Space Research and Technology"
+  - family-names: Tonboe
+    given-names: Rasmus Tage
+    affiliation: "Technical University of Denmark, Department of Space Research and Technology"
+abstract: >-
+  Processing code for a daily sea ice concentration retrieval from the
+  Nimbus-5 Nimbus-E Microwave Spectrometer (NEMS), 17 December 1972 to
+  31 October 1973, with an ERA5-driven radiative-transfer correction and a
+  hybrid one- and two-channel algorithm, and for a spatially complete 14-day
+  NEMS/ESMR product in which remaining voids are reconstructed with a graph
+  neural network.
+keywords:
+  - sea ice concentration
+  - passive microwave
+  - Nimbus-5
+  - NEMS
+  - ESMR
+  - graph neural network
+  - climate data record
