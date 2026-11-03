@@ -140,7 +140,7 @@ def analyze_sea_ice_tiepoints(df, col_22='tb_22_measured', col_31='tb_31_measure
                               rolling_mean_window=14, start_date='1972-12-17', 
                               outlier_method='iqr', iqr_multiplier=1.5,
                               zscore_threshold=3, percentile_lower=1, percentile_upper=99,
-                              verbose=True):
+                              verbose=True, centred=False, half_window_days=7):
     """
     Analyze sea ice brightness temperatures using top/bottom 10% tie-point selection.
     Removes outliers from BOTH 22 GHz and 31 GHz, then calculates separate top/bottom 10%
@@ -199,10 +199,17 @@ def analyze_sea_ice_tiepoints(df, col_22='tb_22_measured', col_31='tb_31_measure
     # Explicit rolling approach
     results = []
     
-    for date in df_indexed.index.unique():
-        # Get data from past 14 days (not including current day)
-        window_start = date - pd.Timedelta(days=14)
-        window_data = df_indexed.loc[window_start:date].iloc[:-1]  # Exclude current day
+    _dates = pd.DatetimeIndex(np.unique(df_indexed.index.normalize())) if centred else df_indexed.index.unique()
+    for date in _dates:
+        if centred:
+            # Centred window of 2*half_window_days+1 days (Kolbe et al. 2024: 15 days, +-7 d)
+            d0 = date.normalize()
+            window_data = df_indexed.loc[d0 - pd.Timedelta(days=half_window_days):
+                                         d0 + pd.Timedelta(days=half_window_days + 1) - pd.Timedelta(microseconds=1)]
+        else:
+            # Get data from past 14 days (not including current day)
+            window_start = date - pd.Timedelta(days=14)
+            window_data = df_indexed.loc[window_start:date].iloc[:-1]  # Exclude current day
         
         stats = rolling_percentile_stats(window_data, 
                                         min_samples=min_samples,
@@ -219,8 +226,9 @@ def analyze_sea_ice_tiepoints(df, col_22='tb_22_measured', col_31='tb_31_measure
         print(f"Filtered records (c_ice >= {min_c_ice}): {len(df)}")
         print(f"This may indicate insufficient data or min_samples={min_samples} is too strict")
     
-    # Apply rolling mean to smooth tie-points over time
-    if rolling_mean_window > 1 and len(stats_df) > 0:
+    # Apply rolling mean to smooth tie-points over time (not with the centred window,
+    # which already spans 15 days)
+    if rolling_mean_window > 1 and len(stats_df) > 0 and not centred:
         # Set datetime as index for rolling operation
         stats_df = stats_df.sort_values('datetime')  # Ensure sorted
         stats_df_indexed = stats_df.set_index('datetime')
@@ -321,7 +329,8 @@ def analyze_ow_tiepoints(df, min_sst, max_sst, max_c_ice,
                          col_22='tb_22_measured', 
                          col_31='tb_31_measured',
                          min_samples=200,
-                         rolling_mean_window=14):
+                         rolling_mean_window=14, centred=False, half_window_days=7,
+                         col_c_ice_box=None, max_c_ice_box=0.01):
     """
     Analyze open water brightness temperatures using backwards-looking rolling window.
     Then applies a rolling mean to smooth the tie-points over time.
@@ -349,6 +358,8 @@ def analyze_ow_tiepoints(df, min_sst, max_sst, max_c_ice,
     # Apply sea ice concentration filter
     if 'c_ice' in df.columns:
         df = df[df['c_ice'] <= max_c_ice]
+    if col_c_ice_box is not None:
+        df = df[df[col_c_ice_box] < max_c_ice_box]
     
     # Remove outliers
     if len(df) > 0:
@@ -365,33 +376,47 @@ def analyze_ow_tiepoints(df, min_sst, max_sst, max_c_ice,
     df = df.sort_values('datetime')
     df_indexed = df.set_index('datetime')
     
-    # Use 14-day backwards-looking rolling window
-    rolling_mean = df_indexed[['tb_22', 'tb_31']].rolling(
-        window='14D', 
-        closed='left'  # Excludes the current day, looks back 14 days
-    ).mean()
+    if centred:
+        # Centred 15-day window per observation date (Kolbe et al. 2024)
+        rows = []
+        days = df_indexed.index.normalize()
+        for d0 in np.unique(days):
+            d0 = pd.Timestamp(d0)
+            w = df_indexed.loc[d0 - pd.Timedelta(days=half_window_days):
+                               d0 + pd.Timedelta(days=half_window_days + 1) - pd.Timedelta(microseconds=1)]
+            rows.append(dict(datetime=d0, tb_22_mean=w['tb_22'].mean(), tb_31_mean=w['tb_31'].mean(),
+                             tb_22_std=w['tb_22'].std(), tb_31_std=w['tb_31'].std(), count=len(w)))
+        stats_combined = pd.DataFrame(rows).dropna()
+        stats_combined = stats_combined[stats_combined['count'] >= min_samples].reset_index(drop=True)
+        rolling_mean_window = 1
+    if not centred:
+        # Use 14-day backwards-looking rolling window
+        rolling_mean = df_indexed[['tb_22', 'tb_31']].rolling(
+            window='14D', 
+            closed='left'  # Excludes the current day, looks back 14 days
+        ).mean()
     
-    rolling_std = df_indexed[['tb_22', 'tb_31']].rolling(
-        window='14D',
-        closed='left'
-    ).std()
+        rolling_std = df_indexed[['tb_22', 'tb_31']].rolling(
+            window='14D',
+            closed='left'
+        ).std()
     
-    rolling_count = df_indexed[['tb_22']].rolling(
-        window='14D',
-        closed='left'
-    ).count()
+        rolling_count = df_indexed[['tb_22']].rolling(
+            window='14D',
+            closed='left'
+        ).count()
     
-    # Combine statistics
-    stats_combined = pd.DataFrame({
-        'tb_22_mean': rolling_mean['tb_22'],
-        'tb_31_mean': rolling_mean['tb_31'],
-        'tb_22_std': rolling_std['tb_22'],
-        'tb_31_std': rolling_std['tb_31'],
-        'count': rolling_count['tb_22']
-    }).dropna()
+        # Combine statistics
+        stats_combined = pd.DataFrame({
+            'tb_22_mean': rolling_mean['tb_22'],
+            'tb_31_mean': rolling_mean['tb_31'],
+            'tb_22_std': rolling_std['tb_22'],
+            'tb_31_std': rolling_std['tb_31'],
+            'count': rolling_count['tb_22']
+        }).dropna()
     
-    # Filter intervals with insufficient samples
-    stats_combined = stats_combined[stats_combined['count'] >= min_samples].reset_index()
+        # Filter intervals with insufficient samples
+        stats_combined = stats_combined[stats_combined['count'] >= min_samples].reset_index()
     
     # Apply rolling mean to smooth tie-points over time
     if rolling_mean_window > 1 and len(stats_combined) > 0:
